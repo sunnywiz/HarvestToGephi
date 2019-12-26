@@ -12,15 +12,20 @@ namespace HarvestToGephi
     class Program
     {
         private const string GephiDateFormat = "yyyy-MM-dd";
+        public static bool IncludeProjects = false; 
 
         static void Main(string[] args)
         {
+            if (args.Contains("p")) IncludeProjects=true; 
             const string csvFile = @"c:\users\sunny\downloads\harvest_time_report_from2018-01-01to2019-12-20.csv";
             List<HarvestExport> records;
             using var reader = new StreamReader(csvFile);
             using var csv = new CsvReader(reader);
 
             records = csv.GetRecords<HarvestExport>().ToList();
+
+            records = records.Where(r => !r.Client.Contains("IgNew", StringComparison.InvariantCultureIgnoreCase))
+                .ToList(); 
 
             int id = 1;
 
@@ -61,14 +66,6 @@ namespace HarvestToGephi
                 StartDate = c.Value.StartDate.ToString(GephiDateFormat),
                 EndDate = c.Value.EndDate.ToString(GephiDateFormat),
                 Size = c.Value.Hours
-            }).Union(projects.Select(p => new Node()
-            {
-                Id = p.Value.Id,
-                Label = p.Value.Name,
-                Noun = "Project",
-                StartDate = p.Value.StartDate.ToString(GephiDateFormat),
-                EndDate = p.Value.EndDate.ToString(GephiDateFormat),
-                Size = p.Value.Hours
             }).Union(users.Select(u=>new Node()
             {
                 Id = u.Value.Id,
@@ -76,7 +73,18 @@ namespace HarvestToGephi
                 Noun = "User",
                 StartDate = u.Value.StartDate.ToString(GephiDateFormat),
                 EndDate = u.Value.EndDate.ToString(GephiDateFormat)
-            }))).ToList();
+            })).ToList();
+
+            if (IncludeProjects)
+                nodes.AddRange(projects.Select(p => new Node()
+                {
+                    Id = p.Value.Id,
+                    Label = p.Value.Name,
+                    Noun = "Project",
+                    StartDate = p.Value.StartDate.ToString(GephiDateFormat),
+                    EndDate = p.Value.EndDate.ToString(GephiDateFormat),
+                    Size = p.Value.Hours
+                }));
 
             var projectEdges = projects.Select(p => new Edge()
             {
@@ -102,24 +110,50 @@ namespace HarvestToGephi
                         .Where(x => x.FirstName == u.FirstName && x.LastName == u.LastName && x.Date >= t &&
                                     x.Date < t2).ToList();
                     if (hours.Count == 0) continue;
-                    var g1 = hours.GroupBy(x => new {x.Client, x.Project}).ToList();
 
-                    foreach (var g in g1)
+                    if (IncludeProjects)
                     {
-                        var project = projects[g.Key];
-                        userEdges.Add(new Edge()
+                        var g1 = hours.GroupBy(x => new {x.Client, x.Project}).ToList();
+
+                        foreach (var g in g1)
                         {
-                            Source = u.Id,
-                            Target = project.Id,
-                            StartDate = t.ToString(GephiDateFormat),
-                            EndDate = t2.ToString(GephiDateFormat),
-                            Verb = "worked"
-                        });
+                            var client = clients[g.Key.Client];
+                            var project = projects[g.Key];
+
+                            userEdges.Add(new Edge()
+                            {
+                                Source = u.Id,
+                                Target = project.Id,
+                                StartDate = t.ToString(GephiDateFormat),
+                                EndDate = t2.ToString(GephiDateFormat),
+                                Verb = "worked", 
+                                Weight = g.Sum(x=>x.Hours)
+                            });
+                        }
+                    } else
+                    {
+                        var g1 = hours.GroupBy(x => x.Client).ToList();
+
+                        foreach (var g in g1)
+                        {
+                            var client = clients[g.Key];
+
+                            userEdges.Add(new Edge()
+                            {
+                                Source = u.Id,
+                                Target = client.Id,
+                                StartDate = t.ToString(GephiDateFormat),
+                                EndDate = t2.ToString(GephiDateFormat),
+                                Verb = "worked",
+                                Weight = g.Sum(x=>x.Hours)
+                            });
+                        }
                     }
                 }
             }
 
-            var edges = projectEdges.Union(userEdges).ToList(); 
+            var edges = userEdges.ToList();
+            if (IncludeProjects) edges.AddRange(projectEdges);
 
             using (var writer = new StreamWriter("harvestNodes.csv"))
             using (var csvw = new CsvWriter(writer))
@@ -150,6 +184,7 @@ namespace HarvestToGephi
             public string Verb { get; set; }
             public string StartDate { get; set; }
             public string EndDate { get; set; }
+            public decimal Weight { get; set; }
         }
 
         public class HarvestExport
